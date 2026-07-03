@@ -61,7 +61,7 @@ class ExcelExtractorTool(Tool):
                 raise ValueError("Invalid Excel content format. Expected File object.")
 
             original_filename = excel_content.filename or "workbook"
-            suffix = self._determine_suffix(original_filename)
+            suffix = self._determine_suffix(original_filename, excel_content.blob)
 
             logger.info(
                 "[excel_extractor] start extraction",
@@ -513,7 +513,16 @@ class ExcelExtractorTool(Tool):
                 return data[start_idx : start_idx + size]
         return data[start_idx:]
 
-    def _determine_suffix(self, filename: Optional[str]) -> str:
+    def _determine_suffix(self, filename: Optional[str], blob: Optional[bytes] = None) -> str:
+        if blob:
+            import io
+            try:
+                if is_zipfile(io.BytesIO(blob)) and not olefile.isOleFile(io.BytesIO(blob)):
+                    return ".xlsx"
+                if olefile.isOleFile(io.BytesIO(blob)):
+                    return ".xls"
+            except Exception:
+                pass
         if not filename:
             return ".xlsx"
         extension = os.path.splitext(filename)[1].lower()
