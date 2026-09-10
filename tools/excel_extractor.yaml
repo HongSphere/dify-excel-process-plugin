@@ -37,4 +37,30 @@ parameters:
     precision: 0
     required: false
     type: number
+  - form: llm
+    human_description:
+      en_US: Maximum number of rows to extract per sheet. Leave empty for no limit.
+      zh_Hans: 每个工作表最多提取的行数。留空或不填表示不限制。
+    label:
+      en_US: Max Rows
+      zh_Hans: 最大行数
+    llm_description: Maximum number of rows to extract per sheet. Default is unlimited.
+    min: 1
+    name: max_rows
+    precision: 0
+    required: false
+    type: number
+  - form: llm
+    human_description:
+      en_US: Maximum number of columns to extract per row. Leave empty for no limit.
+      zh_Hans: 每行最多提取的列数。留空或不填表示不限制。
+    label:
+      en_US: Max Columns
+      zh_Hans: 最大列数
+    llm_description: Maximum number of columns to extract per row. Default is unlimited.
+    min: 1
+    name: max_columns
+    precision: 0
+    required: false
+    type: number
 

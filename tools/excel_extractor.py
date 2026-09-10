@@ -62,6 +62,8 @@ class ExcelExtractorTool(Tool):
             max_characters = self._parse_max_characters(
                 tool_parameters.get("max_characters")
             )
+            max_rows = self._parse_positive_int(tool_parameters.get("max_rows"))
+            max_columns = self._parse_positive_int(tool_parameters.get("max_columns"))
 
             original_filename = excel_content.filename or "workbook"
             suffix = self._determine_suffix(original_filename, excel_content.blob)
@@ -73,6 +75,8 @@ class ExcelExtractorTool(Tool):
                     "suffix": suffix,
                     "mime_type": excel_content.mime_type,
                     "max_characters": max_characters,
+                    "max_rows": max_rows,
+                    "max_columns": max_columns,
                 },
             )
 
@@ -90,12 +94,17 @@ class ExcelExtractorTool(Tool):
                 )
 
                 if is_modern_excel:
-                    text_content = self._extract_text_xlsx(temp_file_path)
+                    text_content = self._extract_text_xlsx(
+                        temp_file_path, max_rows=max_rows, max_columns=max_columns
+                    )
                     images = list(self._extract_images_xlsx(temp_file_path))
                 else:
-                    text_content = self._extract_text_xls(temp_file_path)
+                    text_content = self._extract_text_xls(
+                        temp_file_path, max_rows=max_rows, max_columns=max_columns
+                    )
                     images = list(self._extract_images_xls(temp_file_path))
 
+                original_length = len(text_content or "")
                 if max_characters is not None:
                     text_content = self._truncate_text(text_content, max_characters)
 
@@ -103,6 +112,7 @@ class ExcelExtractorTool(Tool):
                     "[excel_extractor] extraction finished",
                     extra={
                         "text_length": len(text_content or ""),
+                        "char_truncated": len(text_content or "") < original_length,
                         "image_count": len(images),
                     },
                 )
@@ -142,13 +152,22 @@ class ExcelExtractorTool(Tool):
         except Exception as exc:  # noqa: BLE001 - surface friendly error
             raise Exception(f"Error extracting from Excel workbook: {exc}") from exc
 
-    def _extract_text_xlsx(self, file_path: str) -> str:
+    def _extract_text_xlsx(
+        self,
+        file_path: str,
+        max_rows: Optional[int] = None,
+        max_columns: Optional[int] = None,
+    ) -> str:
         workbook = load_workbook(filename=file_path, data_only=True)
         lines: list[str] = []
         for sheet in workbook.worksheets:
             lines.append(f"# Sheet: {sheet.title}")
             has_content = False
             for row_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+                if max_rows is not None and row_idx > max_rows:
+                    break
+                if max_columns is not None:
+                    row = row[:max_columns]
                 row_text = self._render_row_text(row)
                 if not row_text:
                     continue
@@ -159,15 +178,23 @@ class ExcelExtractorTool(Tool):
             lines.append("")  # blank line between sheets
         return "\n".join(lines).strip()
 
-    def _extract_text_xls(self, file_path: str) -> str:
+    def _extract_text_xls(
+        self,
+        file_path: str,
+        max_rows: Optional[int] = None,
+        max_columns: Optional[int] = None,
+    ) -> str:
         workbook = xlrd.open_workbook(file_path, formatting_info=False)
         lines: list[str] = []
         for sheet_name in workbook.sheet_names():
             sheet = workbook.sheet_by_name(sheet_name)
             lines.append(f"# Sheet: {sheet_name}")
             has_content = False
-            for row_idx in range(sheet.nrows):
+            visible_rows = sheet.nrows if max_rows is None else min(sheet.nrows, max_rows)
+            for row_idx in range(visible_rows):
                 row = sheet.row_values(row_idx)
+                if max_columns is not None:
+                    row = row[:max_columns]
                 row_text = self._render_row_text(row)
                 if not row_text:
                     continue
@@ -178,8 +205,8 @@ class ExcelExtractorTool(Tool):
             lines.append("")
         return "\n".join(lines).strip()
 
-    def _parse_max_characters(self, raw: Any) -> Optional[int]:
-        """Parse the ``max_characters`` tool parameter into a positive int.
+    def _parse_positive_int(self, raw: Any) -> Optional[int]:
+        """Parse an optional positive-int tool parameter.
 
         Returns ``None`` (unlimited) when the value is empty, non-positive, or
         unparseable, so invalid input degrades to "no limit" instead of failing
@@ -193,23 +220,22 @@ class ExcelExtractorTool(Tool):
             return None
         return parsed if parsed > 0 else None
 
+    def _parse_max_characters(self, raw: Any) -> Optional[int]:
+        """Parse the ``max_characters`` tool parameter into a positive int.
+
+        Returns ``None`` (unlimited) when the value is empty, non-positive, or
+        unparseable, so invalid input degrades to "no limit" instead of failing
+        the extraction.
+        """
+        return self._parse_positive_int(raw)
+
     def _truncate_text(self, text: str, max_characters: int) -> str:
         """Truncate ``text`` to at most ``max_characters`` characters.
 
-        When the limit can fit the truncation notice, the notice is appended and
-        the returned total is exactly ``max_characters``. When the limit is too
-        small to hold the notice, the text is cut plainly so the output never
-        exceeds the limit.
+        Plain cut without any notice suffix, so the result stays a verbatim
+        prefix of the source and never pollutes downstream content.
         """
-        if len(text) <= max_characters:
-            return text
-        truncation_suffix = (
-            f"\n\n... [内容已截断：已达到最大输出字符限制 ({max_characters} 字符)]"
-        )
-        if len(truncation_suffix) > max_characters:
-            return text[:max_characters]
-        allowed_len = max_characters - len(truncation_suffix)
-        return text[:allowed_len] + truncation_suffix
+        return text[:max_characters]
 
     def _render_row_text(self, row: Sequence[Any]) -> str:
         formatted_cells = [

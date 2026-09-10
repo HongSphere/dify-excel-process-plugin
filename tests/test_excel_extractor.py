@@ -170,7 +170,9 @@ def test_invoke_max_characters_truncation(
         assert len(full_text) > 500
         assert "[内容已截断" not in full_text
 
-    # 2. With max_characters=200 (int and numeric string): truncated to 200 chars
+    # 2. With max_characters=200 (int and numeric string): plain cut to 200 chars.
+    # No notice suffix is appended: the result must be a verbatim prefix of
+    # the unlimited text, so downstream content is never polluted.
     # String parsing itself is covered by test_parse_max_characters; here we
     # just keep one _invoke pass to prove the string value flows through.
     for limit_value in (200, "200"):
@@ -181,7 +183,50 @@ def test_invoke_max_characters_truncation(
         )
         limited_text = messages_limited[0]
         assert len(limited_text) == 200
-        assert "[内容已截断：已达到最大输出字符限制 (200 字符)]" in limited_text
+        assert "[内容已截断" not in limited_text
+        assert limited_text == full_text[:200]
+
+
+def test_invoke_max_rows_caps_rows_per_sheet(
+    excel_tool: ExcelExtractorTool, excel_file_factory: Callable[..., Any]
+) -> None:
+    fake_file = excel_file_factory("many-rows.xlsx", lambda r: f"Row data {r}")
+
+    messages = list(
+        excel_tool._invoke({"excel_content": fake_file, "max_rows": 10})
+    )
+    text = messages[0]
+    assert "Row 10:" in text
+    assert "Row 11:" not in text
+
+
+def test_extract_text_xlsx_max_columns(
+    excel_tool: ExcelExtractorTool, tmp_path: Path
+) -> None:
+    workbook = Workbook()
+    sheet = cast(Worksheet, workbook.active)
+    sheet.title = "Sheet1"
+    sheet.append(["A", "B", "C"])
+    sheet.append(["A", "B", "C"])
+    temp_path = tmp_path / "wide.xlsx"
+    workbook.save(temp_path)
+
+    extracted_text = excel_tool._extract_text_xlsx(str(temp_path), max_columns=2)
+
+    assert "Row 1: A | B" in extracted_text
+    assert "| C" not in extracted_text
+
+
+def test_parse_positive_int(
+    excel_tool: ExcelExtractorTool,
+) -> None:
+    assert excel_tool._parse_positive_int(None) is None
+    assert excel_tool._parse_positive_int("") is None
+    assert excel_tool._parse_positive_int(0) is None
+    assert excel_tool._parse_positive_int(-3) is None
+    assert excel_tool._parse_positive_int(True) is None
+    assert excel_tool._parse_positive_int(10) == 10
+    assert excel_tool._parse_positive_int("10") == 10
 
 
 def test_truncate_text_within_limit_returns_unchanged(
