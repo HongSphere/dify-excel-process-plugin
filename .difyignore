@@ -11,3 +11,13 @@ doc
 tests
 
 AGENTS.md
+
+.git
+
+.gitignore
+
+.pytest_cache
+
+.vscode
+
+debug_extract_test_xls.py

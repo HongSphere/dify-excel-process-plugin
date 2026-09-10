@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator, Sequence
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Optional
 from zipfile import ZipFile, is_zipfile
 import logging
 import tempfile
@@ -13,8 +13,7 @@ import olefile
 import xlrd
 from openpyxl import load_workbook
 
-from dify_plugin.entities import I18nObject
-from dify_plugin.entities.tool import ToolInvokeMessage, ToolParameter
+from dify_plugin.entities.tool import ToolInvokeMessage
 from dify_plugin import Tool
 from dify_plugin.file.file import File
 
@@ -60,6 +59,10 @@ class ExcelExtractorTool(Tool):
             if not isinstance(excel_content, File):
                 raise ValueError("Invalid Excel content format. Expected File object.")
 
+            max_characters = self._parse_max_characters(
+                tool_parameters.get("max_characters")
+            )
+
             original_filename = excel_content.filename or "workbook"
             suffix = self._determine_suffix(original_filename, excel_content.blob)
 
@@ -69,6 +72,7 @@ class ExcelExtractorTool(Tool):
                     "original_filename": original_filename,
                     "suffix": suffix,
                     "mime_type": excel_content.mime_type,
+                    "max_characters": max_characters,
                 },
             )
 
@@ -77,7 +81,7 @@ class ExcelExtractorTool(Tool):
                 temp_file_path = temp_file.name
 
             try:
-                is_modern_excel = not olefile.isOleFile(temp_file_path) and is_zipfile(
+                is_modern_excel = is_zipfile(temp_file_path) and not olefile.isOleFile(
                     temp_file_path
                 )
                 logger.info(
@@ -91,6 +95,9 @@ class ExcelExtractorTool(Tool):
                 else:
                     text_content = self._extract_text_xls(temp_file_path)
                     images = list(self._extract_images_xls(temp_file_path))
+
+                if max_characters is not None:
+                    text_content = self._truncate_text(text_content, max_characters)
 
                 logger.info(
                     "[excel_extractor] extraction finished",
@@ -135,31 +142,6 @@ class ExcelExtractorTool(Tool):
         except Exception as exc:  # noqa: BLE001 - surface friendly error
             raise Exception(f"Error extracting from Excel workbook: {exc}") from exc
 
-    def get_runtime_parameters(
-        self,
-        conversation_id: Optional[str] = None,
-        app_id: Optional[str] = None,
-        message_id: Optional[str] = None,
-    ) -> list[ToolParameter]:
-        tool_parameter_cls = cast(Any, ToolParameter)
-        return [
-            tool_parameter_cls(
-                name="excel_content",
-                label=I18nObject(en_US="Excel Content", zh_Hans="Excel 内容"),
-                human_description=I18nObject(
-                    en_US="Excel file (.xlsx/.xls) to extract text and embedded images from",
-                    zh_Hans="要提取文本和图片的 Excel 文件(.xlsx/.xls)",
-                ),
-                type=ToolParameter.ToolParameterType.FILE,
-                form=ToolParameter.ToolParameterForm.FORM,
-                required=True,
-                file_accepts=[
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    "application/vnd.ms-excel",
-                ],
-            ),
-        ]
-
     def _extract_text_xlsx(self, file_path: str) -> str:
         workbook = load_workbook(filename=file_path, data_only=True)
         lines: list[str] = []
@@ -195,6 +177,39 @@ class ExcelExtractorTool(Tool):
                 lines.append("No textual content in this sheet.")
             lines.append("")
         return "\n".join(lines).strip()
+
+    def _parse_max_characters(self, raw: Any) -> Optional[int]:
+        """Parse the ``max_characters`` tool parameter into a positive int.
+
+        Returns ``None`` (unlimited) when the value is empty, non-positive, or
+        unparseable, so invalid input degrades to "no limit" instead of failing
+        the extraction.
+        """
+        if raw is None or isinstance(raw, bool) or str(raw).strip() == "":
+            return None
+        try:
+            parsed = int(float(raw))
+        except (ValueError, TypeError, OverflowError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _truncate_text(self, text: str, max_characters: int) -> str:
+        """Truncate ``text`` to at most ``max_characters`` characters.
+
+        When the limit can fit the truncation notice, the notice is appended and
+        the returned total is exactly ``max_characters``. When the limit is too
+        small to hold the notice, the text is cut plainly so the output never
+        exceeds the limit.
+        """
+        if len(text) <= max_characters:
+            return text
+        truncation_suffix = (
+            f"\n\n... [内容已截断：已达到最大输出字符限制 ({max_characters} 字符)]"
+        )
+        if len(truncation_suffix) > max_characters:
+            return text[:max_characters]
+        allowed_len = max_characters - len(truncation_suffix)
+        return text[:allowed_len] + truncation_suffix
 
     def _render_row_text(self, row: Sequence[Any]) -> str:
         formatted_cells = [

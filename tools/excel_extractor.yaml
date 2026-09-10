@@ -13,14 +13,28 @@ identity:
     zh_Hans: Excel 提取器
   name: excel_extractor
 parameters:
-- form: llm
-  human_description:
-    en_US: Excel file (.xlsx or .xls) to extract text and images from
-    zh_Hans: 要提取文本和图片的 Excel 文件 (.xlsx 或 .xls)
-  label:
-    en_US: Excel Content
-    zh_Hans: Excel 内容
-  llm_description: Excel file content (.xlsx/.xls) to be extracted
-  name: excel_content
-  required: true
-  type: file
+  - form: llm
+    human_description:
+      en_US: Excel file (.xlsx or .xls) to extract text and images from
+      zh_Hans: 要提取文本和图片的 Excel 文件 (.xlsx 或 .xls)
+    label:
+      en_US: Excel Content
+      zh_Hans: Excel 内容
+    llm_description: Excel file content (.xlsx/.xls) to be extracted
+    name: excel_content
+    required: true
+    type: file
+  - form: llm
+    human_description:
+      en_US: Maximum number of characters to output. Leave empty for no limit.
+      zh_Hans: 文本最大输出字符数。留空或不填表示不限制。
+    label:
+      en_US: Max Characters
+      zh_Hans: 最大输出字符数
+    llm_description: Maximum number of characters to output. Default is unlimited.
+    min: 1
+    name: max_characters
+    precision: 0
+    required: false
+    type: number
+
