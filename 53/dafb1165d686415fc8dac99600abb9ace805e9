@@ -1,0 +1,16 @@
+tests/test_excel_extractor.py
+  h_b8a5bec9fccfca 266-372
+tools/excel_extractor.py
+  h_b8a5bec9fccfca 378-385
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "53dafb1165d686415fc8dac99600abb9ace805e9",
+  "prompts": {},
+  "humans": {
+    "h_b8a5bec9fccfca": {
+      "author": "zhanghong <zhanghong@meibaokeji.com>"
+    }
+  }
+}
