@@ -362,7 +362,6 @@ class ExcelExtractorTool(Tool):
                 continue
             for image in self._extract_images_from_escher(payload):
                 yield image
-            break
 
     def _iter_biff_records_with_continue(
         self, data: bytes
@@ -376,11 +375,15 @@ class ExcelExtractorTool(Tool):
             position += length
             while position + 4 <= total_length:
                 next_type, next_length = struct.unpack_from("<HH", data, position)
-                if next_type != self._CONTINUE_RECORD:
+                if next_type == self._CONTINUE_RECORD or (
+                    record_type == self._MSODRAWINGGROUP_RECORD
+                    and next_type == self._MSODRAWINGGROUP_RECORD
+                ):
+                    position += 4
+                    payload += data[position : position + next_length]
+                    position += next_length
+                else:
                     break
-                position += 4
-                payload += data[position : position + next_length]
-                position += next_length
             yield record_type, payload
 
     def _extract_images_from_escher(

@@ -263,3 +263,110 @@ def test_parse_max_characters(
     assert excel_tool._parse_max_characters("200") == 200
     assert excel_tool._parse_max_characters("200.7") == 200
     assert excel_tool._parse_max_characters(200.7) == 200
+
+
+def test_iter_biff_records_with_continue_merges_consecutive_drawing_group(
+    excel_tool: ExcelExtractorTool,
+) -> None:
+    import struct
+
+    eb_record = excel_tool._MSODRAWINGGROUP_RECORD
+    continue_record = excel_tool._CONTINUE_RECORD
+    other_record = 0x0010
+
+    # Construct records: EB(A) -> EB(B) -> 3C(C) -> OTHER(D)
+    data = (
+        struct.pack("<HH", eb_record, 3)
+        + b"AAA"
+        + struct.pack("<HH", eb_record, 3)
+        + b"BBB"
+        + struct.pack("<HH", continue_record, 3)
+        + b"CCC"
+        + struct.pack("<HH", other_record, 2)
+        + b"DD"
+    )
+
+    records = list(excel_tool._iter_biff_records_with_continue(data))
+
+    assert len(records) == 2
+    assert records[0] == (eb_record, b"AAABBBCCC")
+    assert records[1] == (other_record, b"DD")
+
+
+def _build_split_drawing_group_stream(jpeg_data: bytes) -> bytes:
+    """Build a Workbook BIFF stream whose MSODRAWINGGROUP is split across two
+    consecutive records, the way some server stream generators emit it."""
+    import struct
+
+    blip_record = (
+        struct.pack("<H", 0x0000)  # ver=0, instance=0
+        + struct.pack("<H", 0xF01D)  # OfficeArtBlipJPEG
+        + struct.pack("<I", len(jpeg_data))
+        + jpeg_data
+    )
+    bse_payload = bytes([0x05, 0x00]) + blip_record  # blip_type=JPEG, flags=0
+    bse_record = (
+        struct.pack("<H", 0x0000)
+        + struct.pack("<H", 0xF007)  # OfficeArtBSE
+        + struct.pack("<I", len(bse_payload))
+        + bse_payload
+    )
+    bstore_container = (
+        struct.pack("<H", 0x000F)  # ver=0xF (container)
+        + struct.pack("<H", 0xF001)  # OfficeArtBStoreContainer
+        + struct.pack("<I", len(bse_record))
+        + bse_record
+    )
+    dgg_container = (
+        struct.pack("<H", 0x000F)
+        + struct.pack("<H", 0xF000)  # OfficeArtDggContainer
+        + struct.pack("<I", len(bstore_container))
+        + bstore_container
+    )
+
+    eb_record = 0x00EB  # MSODRAWINGGROUP
+    split = len(dgg_container) // 2
+    return (
+        struct.pack("<HH", eb_record, split)
+        + dgg_container[:split]
+        + struct.pack("<HH", eb_record, len(dgg_container) - split)
+        + dgg_container[split:]
+    )
+
+
+def test_extract_images_from_bstore_split_drawing_group(
+    excel_tool: ExcelExtractorTool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import olefile
+
+    jpeg_data = b"\xff\xd8\xff" + b"fake-jpeg-body" + b"\xff\xd9"
+    workbook_stream = _build_split_drawing_group_stream(jpeg_data)
+
+    class MockOleFile:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exists(self, name):
+            return name == "Workbook"
+
+        def openstream(self, name):
+            class MockStream:
+                def read(self):
+                    return workbook_stream
+
+                def close(self):
+                    pass
+
+            return MockStream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(olefile, "isOleFile", lambda *args, **kwargs: True)
+    monkeypatch.setattr(olefile, "OleFileIO", MockOleFile)
+
+    images = list(excel_tool._extract_images_from_bstore("dummy.xls"))
+    assert len(images) == 1
+    assert images[0] == (jpeg_data, ".jpg")
+
+
