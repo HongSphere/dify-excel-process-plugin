@@ -370,3 +370,61 @@ def test_extract_images_from_bstore_split_drawing_group(
     assert images[0] == (jpeg_data, ".jpg")
 
 
+def test_slice_bmp_valid_and_invalid(excel_tool: ExcelExtractorTool) -> None:
+    import struct
+
+    # 1. Valid 1x1 24-bit BMP
+    file_header = struct.pack("<2sIHHI", b"BM", 58, 0, 0, 54)
+    info_header = struct.pack("<IIIHHIIIIII", 40, 1, 1, 1, 24, 0, 4, 0, 0, 0, 0)
+    pixel_data = b"\xff\x00\x00\x00"
+    valid_bmp = file_header + info_header + pixel_data
+
+    payload = b"prefix_noise_" + valid_bmp + b"_suffix_noise"
+    sliced = excel_tool._slice_bmp(payload, len(b"prefix_noise_"))
+    assert sliced == valid_bmp
+
+    # 2. Spurious false-positive pattern (e.g. repeated record data starting with 'BM')
+    spurious = b"BM\x00\x00\x01\x008\x01\x00\x00\x00\x00\x00\x01\x0f\x00\x08\x02\x10\x00CM"
+    assert excel_tool._slice_bmp(spurious, 0) == b""
+
+    # 3. Truncated or malformed headers
+    assert excel_tool._slice_bmp(b"BM\x10\x00\x00\x00", 0) == b""
+    # Non-zero reserved fields
+    assert (
+        excel_tool._slice_bmp(
+            struct.pack("<2sIHHI", b"BM", 58, 1, 0, 54) + info_header + pixel_data, 0
+        )
+        == b""
+    )
+    # Invalid DIB header size (e.g. 99)
+    bad_info = struct.pack("<IIIHHIIIIII", 99, 1, 1, 1, 24, 0, 4, 0, 0, 0, 0)
+    assert excel_tool._slice_bmp(file_header + bad_info + pixel_data, 0) == b""
+    # Invalid planes (must be 1)
+    bad_planes = struct.pack("<IIIHHIIIIII", 40, 1, 1, 2, 24, 0, 4, 0, 0, 0, 0)
+    assert excel_tool._slice_bmp(file_header + bad_planes + pixel_data, 0) == b""
+
+    # 4. _detect_image_from_stream skips spurious 'BM' in prefix and finds real BMP later
+    stream_with_false_bm = b"OLE_BM_HEADER_" + valid_bmp
+    detected = excel_tool._detect_image_from_stream(stream_with_false_bm)
+    assert detected == (valid_bmp, ".bmp")
+
+    # 5. Valid legacy OS/2 1.x BITMAPCOREHEADER (header_size == 12)
+    core_file_header = struct.pack("<2sIHHI", b"BM", 30, 0, 0, 26)
+    core_header = struct.pack("<IHHHH", 12, 1, 1, 1, 24)
+    core_bmp = core_file_header + core_header + b"\xff\x00\x00\x00"
+    assert excel_tool._slice_bmp(core_bmp, 0) == core_bmp
+
+
+def test_extract_images_xls_rejects_spurious_bmp(
+    excel_tool: ExcelExtractorTool, tmp_path: Path
+) -> None:
+    spurious_file = tmp_path / "spurious.xls"
+    spurious_file.write_bytes(
+        b"header_data"
+        + b"BM\x00\x00\x01\x008\x01\x00\x00\x00\x00\x00\x01\x0f\x00\x08\x02\x10\x00"
+        + b"CM\x00\x00\x01\x008\x01\x00\x00\x00\x00\x00\x01\x0f\x00\x08\x02\x10\x00"
+        + b"DM\x00\x00\x01\x008\x01\x00\x00\x00\x00\x00\x01\x0f\x00\x08\x02\x10\x00"
+    )
+    images = list(excel_tool._extract_images_xls(str(spurious_file)))
+    assert len(images) == 0
+

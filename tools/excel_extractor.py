@@ -537,9 +537,15 @@ class ExcelExtractorTool(Tool):
 
     def _detect_image_from_stream(self, data: bytes) -> Optional[tuple[bytes, str]]:
         for signature, extension, handler in self._signature_handlers():
-            idx = data.find(signature)
-            if idx != -1:
-                return handler(data, idx), extension
+            search_start = 0
+            while True:
+                idx = data.find(signature, search_start)
+                if idx == -1:
+                    break
+                image_bytes = handler(data, idx)
+                if image_bytes:
+                    return image_bytes, extension
+                search_start = idx + 1
         return None
 
     def _slice_png(self, data: bytes, start_idx: int) -> bytes:
@@ -570,11 +576,43 @@ class ExcelExtractorTool(Tool):
         return data[start_idx:end_idx]
 
     def _slice_bmp(self, data: bytes, start_idx: int) -> bytes:
-        if start_idx + 6 <= len(data):
-            size = int.from_bytes(data[start_idx + 2 : start_idx + 6], "little")
-            if size > 0 and start_idx + size <= len(data):
-                return data[start_idx : start_idx + size]
-        return data[start_idx:]
+        if start_idx + 26 > len(data):
+            return b""
+
+        file_size = int.from_bytes(data[start_idx + 2 : start_idx + 6], "little")
+        if file_size < 26 or start_idx + file_size > len(data):
+            return b""
+
+        reserved1 = int.from_bytes(data[start_idx + 6 : start_idx + 8], "little")
+        reserved2 = int.from_bytes(data[start_idx + 8 : start_idx + 10], "little")
+        if reserved1 != 0 or reserved2 != 0:
+            return b""
+
+        pixel_offset = int.from_bytes(data[start_idx + 10 : start_idx + 14], "little")
+        header_size = int.from_bytes(data[start_idx + 14 : start_idx + 18], "little")
+
+        valid_header_sizes = {12, 40, 52, 56, 64, 108, 124}
+        if header_size not in valid_header_sizes:
+            return b""
+
+        if pixel_offset < 14 + header_size or pixel_offset > file_size:
+            return b""
+
+        if header_size == 12:
+            if start_idx + 26 > len(data):
+                return b""
+            planes = int.from_bytes(data[start_idx + 22 : start_idx + 24], "little")
+            bit_count = int.from_bytes(data[start_idx + 24 : start_idx + 26], "little")
+        else:
+            if start_idx + 30 > len(data):
+                return b""
+            planes = int.from_bytes(data[start_idx + 26 : start_idx + 28], "little")
+            bit_count = int.from_bytes(data[start_idx + 28 : start_idx + 30], "little")
+
+        if planes != 1 or bit_count not in {1, 4, 8, 16, 24, 32}:
+            return b""
+
+        return data[start_idx : start_idx + file_size]
 
     def _determine_suffix(self, filename: Optional[str], blob: Optional[bytes] = None) -> str:
         if blob:
